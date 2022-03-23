@@ -253,9 +253,12 @@ class DirectVoxGO(torch.nn.Module):
             sorted_idx = dct_flat.argsort(descending = True)
             mask_flat[:nremain] = 1
             
-            dct_flat[~mask_flat] = 0
-            # If the above line is slow, try the following line
-            # dct_flat.mul_(mask_flat.float())
+            if not quant:
+                # Prune values only if the quantization is not opened
+                # Is it optimal ?
+                dct_flat[~mask_flat] = 0
+                # If the above line is slow, try the following line
+                # dct_flat.mul_(mask_flat.float())
         
         # Quantization, 
         if quant:
@@ -270,7 +273,7 @@ class DirectVoxGO(torch.nn.Module):
                     # In torch, the min function will return both values and indices
                     self.quant_min_feature, _ = out_flat.min(dim = 1)
 
-                    shifted_out = out_flat - self.quant_min_feature.view(-1, 1)
+                    shifted_out = out_flat - self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
                     shifted_out = shifted_out.view(*out.shape)
 
                     quant_max = (2 ** bitwidth - 1)
@@ -302,9 +305,31 @@ class DirectVoxGO(torch.nn.Module):
                         quant_alpha_feature = out_dot / Bdot
                         B = (shifted_out / quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])).round().clamp(0, quant_max)
 
+                        # Print the mse in current iteration
+                        dequanted_out = quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2]) * B
+                        mse = torch.norm(dequanted_out - shifted_out) / shifted_out.numel()
+                        print('Iteration %d MSE %.2f'%(t + 1, mse.item()))
+
                         # Compute 
                     self.quant_alpha_feature = quant_alpha_feature
 
+        
+            # Quant and dequant
+            # Maybe need to re-calculate the minimum values?
+            # out --> [D, Cb1, b1, Hb2, b2, Wb3, b3]
+            with torch.no_grad():
+                self.quant_min_feature, _ = out.flatten(1).min(dim = 1)
+            shifted_out = out - self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
+            # Assertion for debug
+            assert ((shifted_out < 0).sum().item() == 0)
+            B = (shifted_out / self.quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])).round().clamp(0, 2 ** bitwidth - 1)
+            dequanted_out = B * self.quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])
+            out = dequanted_out + self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
+            # Prune out small values.
+            with torch.no_grad():
+                # Maybe recalculate the pruning masks?
+                # Many alternative options to try.
+                out[~mask] = 0
         '''
         with torch.no_grad():
             for i in range(D):
