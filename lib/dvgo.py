@@ -273,7 +273,7 @@ class DirectVoxGO(torch.nn.Module):
                     # In torch, the min function will return both values and indices
                     self.quant_min_feature, _ = out_flat.min(dim = 1)
 
-                    shifted_out = out_flat - self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
+                    shifted_out = out_flat - self.quant_min_feature.view(-1, 1)
                     shifted_out = shifted_out.view(*out.shape)
 
                     quant_max = (2 ** bitwidth - 1)
