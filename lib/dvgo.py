@@ -1,3 +1,8 @@
+"""
+    The codes should be further re-organized. The current implementation 
+    is tooooooooooooooo ugly!!!!!!!!!
+"""
+
 import os
 import time
 import functools
@@ -46,6 +51,10 @@ class DirectVoxGO(torch.nn.Module):
         
         
         self.quant = torch.quantization.QuantStub()
+        
+        # codes for quantization
+        self.register_buffer('quant_alpha_feature', None)
+        self.register_buffer('quant_min_feature', None)
         
         
         
@@ -179,6 +188,7 @@ class DirectVoxGO(torch.nn.Module):
         self.density[nearest_dist[None,None] <= near] = -100
         
 #------------------------------------       
+    # Maybe to further rewrite this function with pytorch
     @torch.no_grad()
     def _getDCTMat(self,inLen):
         """ Generate the DCT transformation matrix with speific length.
@@ -200,8 +210,19 @@ class DirectVoxGO(torch.nn.Module):
         Q[:, 0] /= np.sqrt(2)
         Q = torch.Tensor(Q).to(torch.device('cuda'))
         return Q
-        
-    def block_dct(self,x, rate):
+    
+
+
+    def block_dct(self,x, rate,
+                  quant = False,
+                  update_alpha = False,
+                  bitwidth = 8):
+        """ First divide the dct coefficients into blocks, prune the coefficients and then 
+            quantize the coefficients if erquired. The concurrent version of implementation 
+            is only for algorithm verification, and we will further re-organize the codes
+            to improve the readability and flexibility.
+        """
+        if not quant: assert(self.quant_alpha_feature is None)
         a, D, C, H, W = x.shape
     
         re_x = x.resize(D, C, H, W)  # [features, C, H, W]
@@ -219,9 +240,72 @@ class DirectVoxGO(torch.nn.Module):
         out = torch.einsum('dj,sabcdef->sabcjef', Q, out)
         out = torch.einsum('fk,sabcdef->sabcdek', R, out)
     
-        dctx2 = out.contiguous()
+        out = out.contiguous()
     #    dct_pre = dctx2.clone()
-        dct_abs = torch.abs(dctx2)
+        dct_abs = torch.abs(out)
+        # Apply global sort to determine the mask
+        mask = torch.zeros(*out.shape, dtype = torch.bool, device = out.device)
+        with torch.no_grad():
+            dct_flat = dct_abs.flatten()
+            mask_flat = mask.flatten()
+            nremain = int(rate * D * C * H * W)
+            # The indices are sorted in descending order
+            sorted_idx = dct_flat.argsort(descending = True)
+            mask_flat[:nremain] = 1
+            
+            dct_flat[~mask_flat] = 0
+            # If the above line is slow, try the following line
+            # dct_flat.mul_(mask_flat.float())
+        
+        # Quantization, 
+        if quant:
+            # NOTE: Open the quantization after some training steps
+            if self.quant_alpha_feature is None or update_alpha:
+                # Initializealpha for feature
+                with torch.no_grad():
+                    # Log for debug
+                    print('Update quantize alpha for features')
+                    # out --> [D, Cb1, b1, Hb2, b2, Wb3, b3]
+                    out_flat = out.flatten(1)
+                    # In torch, the min function will return both values and indices
+                    self.quant_min_feature, _ = out_flat.min(dim = 1)
+
+                    shifted_out = out_flat - self.quant_min_feature.view(-1, 1)
+                    shifted_out = shifted_out.view(*out.shape)
+
+                    quant_max = (2 ** bitwidth - 1)
+
+                    # Share the same quantization table for all the 12 channels
+                    # is it sufficient?
+                    quant_alpha_feature, _ = shifted_out.max(dim = 0)
+                    quant_alpha_feature, _ = quant_alpha_feature.max(dim = 0)
+                    quant_alpha_feature, _ = quant_alpha_feature.max(dim = 1)
+                    quant_alpha_feature, _ = quant_alpha_feature.max(dim = 2)
+                    quant_alpha_feature = quant_alpha_feature / quant_max
+
+                    B = (shifted_out / quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])).round().clamp(0, quant_max)
+
+                    for t in range(1000):
+                        # update for 1000 iterations
+                        out_dot = shifted_out ** 2
+                        out_dot = out_dot.sum(dim = 0)
+                        out_dot = out_dot.sum(dim = 0)
+                        out_dot = out_dot.sum(dim = 1)
+                        out_dot = out_dot.sum(dim = 2)
+
+                        Bdot = shifter_out * B
+                        Bdot = Bdot.sum(dim = 0)
+                        Bdot = Bdot.sum(dim = 0)
+                        Bdot = Bdot.sum(dim = 1)
+                        Bdot = Bdot.sum(dim = 2)
+
+                        quant_alpha_feature = out_dot / Bdot
+                        B = (shifted_out / quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])).round().clamp(0, quant_max)
+
+                        # Compute 
+                    self.quant_alpha_feature = quant_alpha_feature
+
+        '''
         with torch.no_grad():
             for i in range(D):
                 dt = (dct_abs[i].flatten())
@@ -229,8 +313,9 @@ class DirectVoxGO(torch.nn.Module):
     
                 dct_flat = dctx2[i].flatten()  
                 dct_flat[sorted_idx[:-remain_num]] = 0
+        '''
     
-        out = torch.einsum('bi,sabcdef->saicdef', P.T, dctx2)
+        out = torch.einsum('bi,sabcdef->saicdef', P.T, out)
         out = torch.einsum('dj,sabcdef->sabcjef', Q.T, out)
         out = torch.einsum('fk,sabcdef->sabcdek', R.T, out)
         
