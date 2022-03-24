@@ -296,7 +296,7 @@ class DirectVoxGO(torch.nn.Module):
                         out_dot = out_dot.sum(dim = 1)
                         out_dot = out_dot.sum(dim = 2)
 
-                        Bdot = shifter_out * B
+                        Bdot = shifted_out * B
                         Bdot = Bdot.sum(dim = 0)
                         Bdot = Bdot.sum(dim = 0)
                         Bdot = Bdot.sum(dim = 1)
