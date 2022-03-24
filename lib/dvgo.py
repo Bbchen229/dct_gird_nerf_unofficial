@@ -8,6 +8,9 @@ import time
 import functools
 import numpy as np
 
+# The package for quantization
+from lib.quantization import BlockQuantization3dFunc
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -312,11 +315,20 @@ class DirectVoxGO(torch.nn.Module):
 
                         # Compute 
                     self.quant_alpha_feature = quant_alpha_feature
+                    del out_dot
+                    del Bdot
+                    del B
+                    del dequanted_out
+                    torch.cuda.empty_cache()
 
         
             # Quant and dequant
             # Maybe need to re-calculate the minimum values?
             # out --> [D, Cb1, b1, Hb2, b2, Wb3, b3]
+            out, self.quant_min_feature = BlockQuantization3dFunc().apply(
+                out, self.quant_alpha_feature, bitwidth, False
+            )
+            '''
             with torch.no_grad():
                 self.quant_min_feature, _ = out.flatten(1).min(dim = 1)
             shifted_out = out - self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
@@ -325,6 +337,7 @@ class DirectVoxGO(torch.nn.Module):
             B = (shifted_out / self.quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])).round().clamp(0, 2 ** bitwidth - 1)
             dequanted_out = B * self.quant_alpha_feature.view(1, 1, block[0], 1, block[1], 1, block[2])
             out = dequanted_out + self.quant_min_feature.view(-1, 1, 1, 1, 1, 1, 1)
+            '''
             # Prune out small values.
             with torch.no_grad():
                 # Maybe recalculate the pruning masks?
