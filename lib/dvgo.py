@@ -254,7 +254,7 @@ class DirectVoxGO(torch.nn.Module):
             nremain = int(rate * D * C * H * W)
             # The indices are sorted in descending order
             sorted_idx = dct_flat.argsort(descending = True)
-            mask_flat[:nremain] = 1
+            mask_flat[sorted_idx[:nremain]] = True
             
             if not quant:
                 # Prune values only if the quantization is not opened
