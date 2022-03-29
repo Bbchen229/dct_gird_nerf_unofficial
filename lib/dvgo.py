@@ -293,13 +293,13 @@ class DirectVoxGO(torch.nn.Module):
 
                     for t in range(1000):
                         # update for 1000 iterations
-                        out_dot = shifted_out ** 2
+                        out_dot = shifted_out * B
                         out_dot = out_dot.sum(dim = 0)
                         out_dot = out_dot.sum(dim = 0)
                         out_dot = out_dot.sum(dim = 1)
                         out_dot = out_dot.sum(dim = 2)
 
-                        Bdot = shifted_out * B
+                        Bdot = B ** 2
                         Bdot = Bdot.sum(dim = 0)
                         Bdot = Bdot.sum(dim = 0)
                         Bdot = Bdot.sum(dim = 1)
@@ -423,7 +423,7 @@ class DirectVoxGO(torch.nn.Module):
         self.density = torch.nn.Parameter(
             F.interpolate(self.density.data, size=tuple(self.world_size), mode='trilinear', align_corners=True))
             
-        self.k0.data = self.dct3(self.k0.data)    
+        #self.k0.data = self.dct3(self.k0.data)    
         if self.k0_dim > 0:
             self.k0 = torch.nn.Parameter(
                 F.interpolate(self.k0.data, size=tuple(self.world_size), mode='trilinear', align_corners=True))
@@ -565,7 +565,7 @@ class DirectVoxGO(torch.nn.Module):
         weights, alphainv_cum = get_ray_marching_ray(alpha)
         
 #-------------------------------           
-        self.k0.data = self.block_dct(self.k0.data,rate = 0.075)
+        quanted_k0 = self.block_dct(self.k0,rate = 0.075)
 #        self.k0.data = torch.quantization.quantize_dynamic(self.k0.data,{torch.nn.Parameter},dtype=torch.qint8)
         
         self.k0.data = self.quant(self.k0.data)
@@ -573,7 +573,7 @@ class DirectVoxGO(torch.nn.Module):
         mask = (weights > self.fast_color_thres)
         k0 = torch.zeros(*weights.shape, self.k0_dim).to(weights)
         if not self.rgbnet_full_implicit:
-            k0[mask] = self.grid_sampler(rays_pts[mask], self.k0)
+            k0[mask] = self.grid_sampler(rays_pts[mask], quanted_k0)
 
         if self.rgbnet is None:
             # no view-depend effect
